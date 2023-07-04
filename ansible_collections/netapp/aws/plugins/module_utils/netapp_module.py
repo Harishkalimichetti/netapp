@@ -36,8 +36,17 @@ def cmp(a, b):
     :param b: second object to check
     :return:
     """
-    return (a > b) - (a < b)
-
+    if isinstance(a, str) and isinstance(b, str):
+        return (a > b) - (a < b)
+    elif isinstance(a, int) and isinstance(b, int):
+        return (a > b) - (a < b)
+    elif isinstance(a, float) and isinstance(b, float):
+        return (a > b) - (a < b)
+    elif isinstance(a, bool) and isinstance(b, bool):
+        return (a > b) - (a < b)
+    elif:
+        return -1 # Default comparison result if types are not supported
+    
 
 class NetAppModule(object):
     '''
@@ -112,7 +121,7 @@ class NetAppModule(object):
         # collect changed attributes
         for key, value in current.items():
             if key in desired and desired[key] is not None:
-                if type(value) is list:
+                if isinstance(value, list):
                     value.sort()
                     desired[key].sort()
                 if cmp(value, desired[key]) != 0:
