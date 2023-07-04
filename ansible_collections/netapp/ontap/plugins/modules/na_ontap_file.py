@@ -19,7 +19,7 @@ module: na_ontap_file
 short_description: NetApp ONTAP manage files
 extends_documentation_fragment:
     - netapp.na_ontap
-version: '206'
+version: '2.6'
 author: NetApp Ansible Team (@carchi8py) <ng-ansibleteam@netapp.com>
 
 description:
