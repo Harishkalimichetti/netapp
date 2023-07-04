@@ -4,130 +4,74 @@
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
 from __future__ import absolute_import, division, print_function
-
 __metaclass__ = type
 
-ANSIBLE_METADATA = {
-    'metadata_version': '1.1',
-    'status': ['preview'],
-    'supported_by': 'certified'
-}
 
-DOCUMENTATION = """
+ANSIBLE_METADATA = {'metadata_version': '1.1',
+                    'status': ['preview'],
+                    'supported_by': 'certified'}
 
-module: na_ontap_file_directory_policy
-author: NetApp Ansible Team (@carchi8py) <ng-ansibleteam@netapp.com>
-short_description: NetApp ONTAP create, delete, or modify vserver security file-directory policy
+
+DOCUMENTATION = '''
+
+module: na_ontap_file
+
+short_description: NetApp ONTAP manage files
 extends_documentation_fragment:
-    - netapp.ontap.netapp.na_ontap
-version_added: 20.8.0
+    - netapp.na_ontap
+version: '206'
+author: NetApp Ansible Team (@carchi8py) <ng-ansibleteam@netapp.com>
+
 description:
-    - Create, modify, or destroy vserver security file-directory policy
-    - Add or remove task from policy.
-    - Each time a policy/task is created/modified, automatically apply policy to vserver.
+    - Read and write a file
 
 options:
+
   state:
     description:
     - Whether the specified policy or task should exist or not.
     choices: ['present', 'absent']
     default: present
-    type: str
-
-  vserver:
-    description:
-    - Specifies the vserver for the policy.
-    required: true
-    type: str
-
-  policy_name:
-    description:
-    - Specifies the name of the policy.
-    type: str
-    required: true
-
-  access_control:
-    description:
-    - Specifies the access control of task to be applied.
-    choices: ['file_directory', 'slag']
-    type: str
-
-  ntfs_mode:
-    description:
-    - Specifies NTFS Propagation Mode.
-    choices: ['propagate', 'ignore', 'replace']
-    type: str
-
-  ntfs_sd:
-    description:
-    - Specifies NTFS security descriptor identifier.
-    type: list
-    elements: str
 
   path:
     description:
-    - Specifies the file or folder path of the task.
-    - If path is specified and the policy which the task is adding to, does not exist, it will create the policy first then add the task to it.
-    - If path is specified, delete operation only removes task from policy.
-    type: str
+    - Path to the file start with /vol/
+    required: true
 
-  security_type:
+  startup:
     description:
-    - Specifies the type of security.
-    type: str
-    choices: ['ntfs', 'nfsv4']
+    - copy the content of this file to the file
 
-  ignore_broken_symlinks:
+  chownhome:
     description:
-    - Skip Broken Symlinks.
-    - Options used when applying the policy to vserver.
-    type: bool
+    - copy the content of this file to the file
 
-"""
+  uid:
+    description:
+    - uid of the user to chown the path to
+
+  gid:
+    description:
+    - gid number of the group to chown the path to
+    
+  vserver:
+    description:
+    - The name of the vserver to use.
+    required: true
+
+'''
 
 EXAMPLES = """
-
-    - name: create policy
-      na_ontap_file_directory_policy:
+    - name: CHown homedir and extract
+      org_na_ontap_file:
+        path: "/proj/stv1002/chownhome_volume/q"
+        startup: "/vol/myvolume/thisfile"
+        chownhome: "/vol/myvolume/thisfile"
         hostname: "{{ hostname }}"
         username: "{{ username }}"
         password: "{{ password }}"
         state: present
-        vserver: ansible
-        policy_name: file_policy
-        ignore_broken_symlinks: false
-
-    - name: add task to existing file_policy
-      na_ontap_file_directory_policy:
-        hostname: "{{ hostname }}"
-        username: "{{ username }}"
-        password: "{{ password }}"
-        state: present
-        vserver: ansible
-        policy_name: file_policy
-        path: /vol
-        ntfs_sd: ansible_sd
-        ntfs_mode: propagate
-
-    - name: delete task from file_policy.
-      na_ontap_file_directory_policy:
-        hostname: "{{ hostname }}"
-        username: "{{ username }}"
-        password: "{{ password }}"
-        state: absent
-        vserver: ansible
-        policy_name: file_policy
-        path: /vol
-
-    - name: delete file_policy along with the tasks.
-      na_ontap_file_directory_policy:
-        hostname: "{{ hostname }}"
-        username: "{{ username }}"
-        password: "{{ password }}"
-        state: absent
-        vserver: ansible
-        policy_name: file_policy
-
+        vserver: "dataserver"
 
 """
 
@@ -136,38 +80,38 @@ RETURN = """
 """
 
 import traceback
-import ansible_collections.netapp.ontap.plugins.module_utils.netapp as netapp_utils
-from ansible_collections.netapp.ontap.plugins.module_utils.netapp_module import NetAppModule
+import ansible.module_utils.netapp as netapp_utils
 from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils._text import to_native
 
 HAS_NETAPP_LIB = netapp_utils.has_netapp_lib()
 
 
+
 class NetAppOntapFilePolicy(object):
 
     def __init__(self):
-        """
-            Initialize the Ontap file directory policy class
-        """
-
         self.argument_spec = netapp_utils.na_ontap_host_argument_spec()
         self.argument_spec.update(dict(
-            state=dict(required=False, choices=['present', 'absent'], default='present'),
+            state=dict(required=False, choices=[
+                       'present', 'absent'], default='present'),
             vserver=dict(required=True, type='str'),
-            policy_name=dict(required=True, type='str'),
-            access_control=dict(required=False, type='str', choices=['file_directory', 'slag']),
-            ntfs_mode=dict(required=False, choices=['propagate', 'ignore', 'replace']),
-            ntfs_sd=dict(required=False, type='list', elements='str'),
             path=dict(required=False, type='str'),
-            security_type=dict(required=False, type='str', choices=['ntfs', 'nfsv4']),
-            ignore_broken_symlinks=dict(required=False, type='bool')
+            startup=dict(required=False, type='str'),
+            chownhome=dict(required=False, type='str'),
+            uid=dict(required=False, type='str'),
+            gid=dict(required=False, type='str'),
         ))
 
         self.module = AnsibleModule(
             argument_spec=self.argument_spec,
+            required_if=[
+                ('state', 'present', ['path'])
+            ],
             supports_check_mode=True,
         )
+
+        p = self.module.params
 
         # set up variables
         self.na_helper = NetAppModule()
