@@ -88,7 +88,7 @@ HAS_NETAPP_LIB = netapp_utils.has_netapp_lib()
 
 
 
-class NetAppOntapFilePolicy(object):
+class NetAppOntapQTree(object):
 
     def __init__(self):
         self.argument_spec = netapp_utils.na_ontap_host_argument_spec()
@@ -99,8 +99,8 @@ class NetAppOntapFilePolicy(object):
             path=dict(required=False, type='str'),
             startup=dict(required=False, type='str'),
             chownhome=dict(required=False, type='str'),
-            uid=dict(required=False, type='str'),
-            gid=dict(required=False, type='str'),
+            uid=dict(required=Tuue, type='str'),
+            gid=dict(required=True, type='str'),
         ))
 
         self.module = AnsibleModule(
