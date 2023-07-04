@@ -28,9 +28,6 @@
 
 ''' Support class for NetApp ansible modules '''
 
-from __future__ import (absolute_import, division, print_function)
-__metaclass__ = type
-
 
 def cmp(a, b):
     """
@@ -39,18 +36,6 @@ def cmp(a, b):
     :param b: second object to check
     :return:
     """
-    # convert to lower case for string comparison.
-    if a is None:
-        return -1
-    if isinstance(a, str) and isinstance(b, str):
-        a = a.lower()
-        b = b.lower()
-    # if list has string element, convert string to lower case.
-    if isinstance(a, list) and isinstance(b, list):
-        a = [x.lower() if isinstance(x, str) else x for x in a]
-        b = [x.lower() if isinstance(x, str) else x for x in b]
-        a.sort()
-        b.sort()
     return (a > b) - (a < b)
 
 
@@ -98,22 +83,44 @@ class NetAppModule(object):
             return 'delete'
         return 'create'
 
-    def compare_and_update_values(self, current, desired, keys_to_compare):
-        updated_values = dict()
-        is_changed = False
-        for key in keys_to_compare:
-            if key in current:
-                if key in desired and desired[key] is not None:
-                    if current[key] != desired[key]:
-                        updated_values[key] = desired[key]
-                        is_changed = True
-                    else:
-                        updated_values[key] = current[key]
-                else:
-                    updated_values[key] = current[key]
+    @staticmethod
+    def check_keys(current, desired):
+        ''' TODO: raise an error if keys do not match
+            with the exception of:
+            new_name, state is desired
+        '''
+        pass
 
-        return updated_values, is_changed
+    def get_modified_attributes(self, current, desired):
+        ''' takes two listes of attributes and return a list of attributes that are
+            not in the desired state
+            It is expected that all attributes of interest are listed in current and
+            desired.
 
+            NOTE: depending on the attribute, the caller may need to do a modiry or a
+            different operation (eg move volume if the modified attribute is an
+            aggregate name)
+        '''
+        # if the object does not exists, we can't modify it
+        modified = dict()
+        if current is None:
+            return modified
+
+        # error out if keys do not match
+        self.check_keys(current, desired)
+
+        # collect changed attributes
+        for key, value in current.items():
+            if key in desired and desired[key] is not None:
+                if type(value) is list:
+                    value.sort()
+                    desired[key].sort()
+                if cmp(value, desired[key]) != 0:
+                    modified[key] = desired[key]
+            if modified:
+                self.changed = True
+            return modified
+            
     def is_rename_action(self, source, target):
         ''' takes a source and target object, and returns True
             if a rename is required
