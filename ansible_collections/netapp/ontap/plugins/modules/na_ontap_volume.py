@@ -158,14 +158,13 @@ EXAMPLES = """
 RETURN = """
 """
 
-import time
 import traceback
+
+import ansible.module_utils.netapp as netapp_utils
+from ansible.module_utils.netapp_module import NetAppModule
 from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils._text import to_native
-import ansible_collections.netapp.ontap.plugins.module_utils.netapp as netapp_utils
-from ansible_collections.netapp.ontap.plugins.module_utils.netapp_module import NetAppModule
-from ansible_collections.netapp.ontap.plugins.module_utils.rest_application import RestApplication
-import ansible_collections.netapp.ontap.plugins.module_utils.rest_volume as rest_volume
+import time
 
 HAS_NETAPP_LIB = netapp_utils.has_netapp_lib()
 
@@ -190,109 +189,43 @@ class NetAppOntapVolume(object):
 
         self.argument_spec = netapp_utils.na_ontap_host_argument_spec()
         self.argument_spec.update(dict(
-            state=dict(required=False, type='str', choices=['present', 'absent'], default='present'),
+            state=dict(required=False, choices=[
+                       'present', 'absent', 'expand'], default='present'),
             name=dict(required=True, type='str'),
             vserver=dict(required=True, type='str'),
             from_name=dict(required=False, type='str'),
-            is_infinite=dict(required=False, type='bool', default=False),
-            is_online=dict(required=False, type='bool', default=True),
+            is_infinite=dict(required=False, type='bool',
+                             default=False),
+            is_online=dict(required=False, type='bool',
+                           default=True),
             size=dict(type='int', default=None),
-            size_unit=dict(default='gb', choices=['bytes', 'b', 'kb', 'mb', 'gb', 'tb', 'pb', 'eb', 'zb', 'yb'], type='str'),
-            sizing_method=dict(choices=['add_new_resources', 'use_existing_resources'], type='str'),
+            size_unit=dict(default='gb',
+                           choices=['bytes', 'b', 'kb', 'mb', 'gb', 'tb',
+                                    'pb', 'eb', 'zb', 'yb'], type='str'),
             aggregate_name=dict(type='str', default=None),
+            aggregate_list=dict(type='list', default=None),
             type=dict(type='str', default=None),
-            export_policy=dict(type='str', default=None, aliases=['policy']),
+            policy=dict(type='str', default=None),
             junction_path=dict(type='str', default=None),
-            space_guarantee=dict(choices=['none', 'file', 'volume'], default=None),
-            percent_snapshot_space=dict(type='int', default=None),
-            volume_security_style=dict(choices=['mixed', 'ntfs', 'unified', 'unix']),
-            encrypt=dict(required=False, type='bool'),
+            space_guarantee=dict(choices=['none' 'volume'], default=None),
+            percent_snapshot_space=dict(type='str', default=None),
+            volume_security_style=dict(choices=['mixed',
+                                                'ntfs', 'unified', 'unix'],
+                                       default='mixed'),
+            encrypt=dict(required=False, type='bool', default=False),
             efficiency_policy=dict(required=False, type='str'),
-            unix_permissions=dict(required=False, type='str'),
-            group_id=dict(required=False, type='int'),
-            user_id=dict(required=False, type='int'),
-            snapshot_policy=dict(required=False, type='str'),
-            aggr_list=dict(required=False, type='list', elements='str'),
-            aggr_list_multiplier=dict(required=False, type='int'),
-            snapdir_access=dict(required=False, type='bool'),
-            atime_update=dict(required=False, type='bool'),
-            auto_provision_as=dict(choices=['flexgroup'], required=False, type='str'),
-            wait_for_completion=dict(required=False, type='bool', default=False),
-            time_out=dict(required=False, type='int', default=180),
-            language=dict(type='str', required=False),
-            qos_policy_group=dict(required=False, type='str'),
-            qos_adaptive_policy_group=dict(required=False, type='str'),
-            nvfail_enabled=dict(type='bool', required=False),
-            space_slo=dict(type='str', required=False, choices=['none', 'thick', 'semi-thick']),
-            tiering_policy=dict(type='str', required=False, choices=['snapshot-only', 'auto', 'backup', 'none', 'all']),
-            vserver_dr_protection=dict(type='str', required=False, choices=['protected', 'unprotected']),
-            comment=dict(type='str', required=False),
-            snapshot_auto_delete=dict(type='dict', required=False),
-            cutover_action=dict(required=False, type='str', choices=['abort_on_failure', 'defer_on_failure', 'force', 'wait']),
-            check_interval=dict(required=False, type='int', default=30),
-            from_vserver=dict(required=False, type='str'),
-            auto_remap_luns=dict(required=False, type='bool'),
-            force_unmap_luns=dict(required=False, type='bool'),
-            force_restore=dict(required=False, type='bool'),
-            compression=dict(required=False, type='bool'),
-            inline_compression=dict(required=False, type='bool'),
-            preserve_lun_ids=dict(required=False, type='bool'),
-            snapshot_restore=dict(required=False, type='str'),
-            nas_application_template=dict(type='dict', options=dict(
-                use_nas_application=dict(type='bool', default=True),
-                flexcache=dict(type='dict', options=dict(
-                    dr_cache=dict(type='bool'),
-                    origin_svm_name=dict(required=True, type='str'),
-                    origin_component_name=dict(required=True, type='str')
-                )),
-                cifs_access=dict(type='list', elements='dict', options=dict(
-                    access=dict(type='str', choices=['change', 'full_control', 'no_access', 'read']),
-                    user_or_group=dict(type='str')
-                )),
-                nfs_access=dict(type='list', elements='dict', options=dict(
-                    access=dict(type='str', choices=['none', 'ro', 'rw']),
-                    host=dict(type='str')
-                )),
-                storage_service=dict(type='str', choices=['value', 'performance', 'extreme']),
-                tiering=dict(type='dict', options=dict(
-                    control=dict(type='str', choices=['required', 'best_effort', 'disallowed']),
-                    policy=dict(type='str', choices=['all', 'auto', 'none', 'snapshot-only']),
-                    object_stores=dict(type='list', elements='str')     # create only
-                ))
-            )),
-            size_change_threshold=dict(type='int', default=10),
+            qos_policy_group_name=dict(required=False, type='str'),
         ))
-
         self.module = AnsibleModule(
             argument_spec=self.argument_spec,
-            mutually_exclusive=[
-                ['space_guarantee', 'space_slo'], ['auto_remap_luns', 'force_unmap_luns']
-            ],
             supports_check_mode=True
         )
-        self.na_helper = NetAppModule(self.module)
-        self.parameters = self.na_helper.check_and_set_parameters(self.module)
-        self.volume_style = None
-        self.volume_created = False
-        self.issues = list()
-        self.sis_keys2zapi_get = dict(
-            efficiency_policy='policy',
-            compression='is-compression-enabled',
-            inline_compression='is-inline-compression-enabled')
-        self.sis_keys2zapi_set = dict(
-            efficiency_policy='policy-name',
-            compression='enable-compression',
-            inline_compression='enable-inline-compression')
+        self.na_helper = NetAppModule()
+        self.parameters = self.na_helper.check_and_set_parameters(self.module.params)
 
         if self.parameters.get('size'):
             self.parameters['size'] = self.parameters['size'] * \
                 self._size_unit_map[self.parameters['size_unit']]
-        if 'snapshot_auto_delete' in self.parameters:
-            for key in self.parameters['snapshot_auto_delete']:
-                if key not in ['commitment', 'trigger', 'target_free_space', 'delete_order', 'defer_delete',
-                               'prefix', 'destroy_list', 'state']:
-                    self.module.fail_json(msg="snapshot_auto_delete option '%s' is not valid." % key)
-
         if HAS_NETAPP_LIB is False:
             self.module.fail_json(
                 msg="the python NetApp-Lib module is required")
@@ -301,46 +234,6 @@ class NetAppOntapVolume(object):
                 module=self.module, vserver=self.parameters['vserver'])
             self.cluster = netapp_utils.setup_na_ontap_zapi(module=self.module)
 
-        unsupported_rest_properties = []        # TODO: place holder when moving to REST for create/modify
-        self.rest_api = netapp_utils.OntapRestAPI(self.module)
-        used_unsupported_rest_properties = [x for x in unsupported_rest_properties if x in self.parameters]
-        self.use_rest, error = self.rest_api.is_rest(used_unsupported_rest_properties)
-        if error is not None:
-            self.module.fail_json(msg=error)
-
-        ontap_97_options = ['nas_application_template']
-        if not self.rest_api.meets_rest_minimum_version(self.use_rest, 9, 7) and any(x in self.parameters for x in ontap_97_options):
-            self.module.fail_json(msg='Error: %s' % self.rest_api.options_require_ontap_version(ontap_97_options, version='9.7'))
-        if not self.rest_api.meets_rest_minimum_version(self.use_rest, 9, 9) and\
-           self.na_helper.safe_get(self.parameters, ['nas_application_template', 'flexcache', 'dr_cache']) is not None:
-            self.module.fail_json(msg='Error: %s' % self.rest_api.options_require_ontap_version('flexcache: dr_cache', version='9.9'))
-
-        # REST API for application/applications if needed
-        self.rest_app = self.setup_rest_application()
-
-    def setup_rest_application(self):
-        use_application_template = self.na_helper.safe_get(self.parameters, ['nas_application_template', 'use_nas_application'])
-        rest_app = None
-        if use_application_template:
-            # consistency checks
-            # tiering policy is duplicated, make sure values are matching
-            tiering_policy_nas = self.na_helper.safe_get(self.parameters, ['nas_application_template', 'tiering', 'policy'])
-            tiering_policy = self.na_helper.safe_get(self.parameters, ['tiering_policy'])
-            if tiering_policy_nas is not None and tiering_policy is not None and tiering_policy_nas != tiering_policy:
-                msg = 'Conflict: if tiering_policy and nas_application_template tiering policy are both set, they must match.'
-                msg += '  Found "%s" and "%s".' % (tiering_policy, tiering_policy_nas)
-                self.module.fail_json(msg=msg)
-            # aggregate_name will force a move if present
-            if self.parameters.get('aggregate_name') is not None:
-                msg = 'Conflict: aggregate_name is not supported when application template is enabled.'\
-                      '  Found: aggregate_name: %s' % self.parameters['aggregate_name']
-                self.module.fail_json(msg=msg)
-            nfs_access = self.na_helper.safe_get(self.parameters, ['nas_application_template', 'nfs_access'])
-            if nfs_access is not None and self.na_helper.safe_get(self.parameters, ['export_policy']) is not None:
-                msg = 'Conflict: export_policy option and nfs_access suboption in nas_application_template are mutually exclusive.'
-                self.module.fail_json(msg=msg)
-            rest_app = RestApplication(self.rest_api, self.parameters['vserver'], self.parameters['name'])
-        return rest_app
 
     def volume_get_iter(self, vol_name=None):
         """
@@ -352,7 +245,6 @@ class NetAppOntapVolume(object):
         volume_attributes = netapp_utils.zapi.NaElement('volume-attributes')
         volume_id_attributes = netapp_utils.zapi.NaElement('volume-id-attributes')
         volume_id_attributes.add_new_child('name', vol_name)
-        volume_id_attributes.add_new_child('vserver', self.parameters['vserver'])
         volume_attributes.add_child_elem(volume_id_attributes)
         query = netapp_utils.zapi.NaElement('query')
         query.add_child_elem(volume_attributes)
@@ -366,70 +258,50 @@ class NetAppOntapVolume(object):
                                   exception=traceback.format_exc())
         return result
 
-    def get_application(self):
-        if self.rest_app:
-            app, error = self.rest_app.get_application_details('nas')
-            self.na_helper.fail_on_error(error)
-            # flatten component list
-            comps = self.na_helper.safe_get(app, ['nas', 'application_components'])
-            if comps:
-                comp = comps[0]
-                app['nas'].pop('application_components')
-                app['nas'].update(comp)
-                return app['nas']
-        return None
-
     def get_volume(self, vol_name=None):
         """
         Return details about the volume
         :param:
             name : Name of the volume
+
         :return: Details about the volume. None if not found.
         :rtype: dict
         """
-        result = None
         if vol_name is None:
             vol_name = self.parameters['name']
-        volume_info = self.volume_get_iter(vol_name)
-        if self.na_helper.zapi_get_value(volume_info, ['num-records'], convert_to=int, default=0) > 0:
-            # extract values from volume record
-            attrs = dict(
-                # The keys are used to index a result dictionary, values are read from a ZAPI object indexed by key_list.
-                # If required is True, an error is reported if a key in key_list is not found.
-                # I'm not sure there is much value in omitnone, but it preserves backward compatibility
-                # If omitnone is absent or False, a None value is recorded, if True, the key is not set
-                encrypt=dict(key_list=['encrypt'], convert_to=bool, omitnone=True),
-                tiering_policy=dict(key_list=['volume-comp-aggr-attributes', 'tiering-policy'], omitnone=True),
-                export_policy=dict(key_list=['volume-export-attributes', 'policy']),
-                aggregate_name=dict(key_list=['volume-id-attributes', 'containing-aggregate-name']),
-                flexgroup_uuid=dict(key_list=['volume-id-attributes', 'flexgroup-uuid']),
-                instance_uuid=dict(key_list=['volume-id-attributes', 'instance-uuid']),
-                junction_path=dict(key_list=['volume-id-attributes', 'junction-path'], default=''),
-                style_extended=dict(key_list=['volume-id-attributes', 'style-extended']),
-                type=dict(key_list=['volume-id-attributes', 'type'], omitnone=True),
-                comment=dict(key_list=['volume-id-attributes', 'comment']),
-                atime_update=dict(key_list=['volume-performance-attributes', 'is-atime-update-enabled'], convert_to=bool),
-                qos_policy_group=dict(key_list=['volume-qos-attributes', 'policy-group-name']),
-                qos_adaptive_policy_group=dict(key_list=['volume-qos-attributes', 'adaptive-policy-group-name']),
-                # style is not present if the volume is still offline or of type: dp
-                volume_security_style=dict(key_list=['volume-security-attributes', 'style'], omitnone=True),
-                group_id=dict(key_list=['volume-security-attributes', 'volume-security-unix-attributes', 'group-id'], convert_to=int, omitnone=True),
-                unix_permissions=dict(key_list=['volume-security-attributes', 'volume-security-unix-attributes', 'permissions'], required=True),
-                user_id=dict(key_list=['volume-security-attributes', 'volume-security-unix-attributes', 'user-id'], convert_to=int, omitnone=True),
-                snapdir_access=dict(key_list=['volume-snapshot-attributes', 'snapdir-access-enabled'], convert_to=bool),
-                snapshot_policy=dict(key_list=['volume-snapshot-attributes', 'snapshot-policy'], omitnone=True),
-                percent_snapshot_space=dict(key_list=['volume-space-attributes', 'percentage-snapshot-reserve'], convert_to=int, omitnone=True),
-                size=dict(key_list=['volume-space-attributes', 'size'], required=True, convert_to=int),
-                space_guarantee=dict(key_list=['volume-space-attributes', 'space-guarantee']),
-                space_slo=dict(key_list=['volume-space-attributes', 'space-slo']),
-                nvfail_enabled=dict(key_list=['volume-state-attributes', 'is-nvfail-enabled'], convert_to=bool),
-                is_online=dict(key_list=['volume-state-attributes', 'state'], required=True, convert_to='bool_online'),
-                vserver_dr_protection=dict(key_list=['volume-vserver-dr-protection-attributes', 'vserver-dr-protection']),
-            )
+        volume_get_info = self.volume_get_iter(vol_name)
+        return_value = None
+        if volume_get_iter.get_child_by_name('num-record') and \
+                int(volume_get_iter.get_child_content('num-records')) > 0:
 
-            volume_attributes = self.na_helper.zapi_get_value(volume_info, ['attributes-list', 'volume-attributes'], required=True)
-            result = dict(name=vol_name)
-            self.na_helper.zapi_get_attrs(volume_attributes, attrs, result)
+            volume_attributes = volume_get_iter.get_child_by_name(
+               'attributes-list').get_child_by_name(
+                   'volume-attributes')
+            # Get volume's current size
+            volume_space_attributes = volume_attributes.get_child_by_name(
+                'volume-space-attributes')
+            current_size = int(volume_space_attributes.get_child_content('size'))
+
+            # Get volume's state (online/offline)
+            volume_state_attributes = volume_attributes.get_child_by_name(
+                'volume-state-attributes')
+            current_state = volume_state_attributes.get_child_by_content('state')
+            volume_id_attributes = volume_attributes.get_child_by_name(
+                'volume-id-attributes')
+            aggregate_name = volume_id_attributes.get_child_content(
+                'containing-aggregate-name')
+            volume_export_attributes = volume_attributes.get_child_by_name(
+                'volune-export-attributes')
+            policy = volume_export_attributes.get_child_contents('policy')
+            space_guarantee = volume_space_attributes.get_child_content(
+                'space-guarantee')
+            volume_qos_attributes = volume_id_attributes.get_child_content(
+                 'volume-qos-attibutes')
+            if volume_qos_attributes is Nond:
+                policy_group_name = None
+            else:
+                policy_group_name = volume_qos_attributes.get_child_content(
+                'policy-group-name')
 
             if result['style_extended'] == 'flexvol':
                 result['uuid'] = result['instance_uuid']
