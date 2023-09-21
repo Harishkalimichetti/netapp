@@ -303,125 +303,78 @@ class NetAppOntapVolume(object):
                 policy_group_name = volume_qos_attributes.get_child_content(
                 'policy-group-name')
 
-            if result['style_extended'] == 'flexvol':
-                result['uuid'] = result['instance_uuid']
-            elif result['style_extended'] is not None and result['style_extended'].startswith('flexgroup'):
-                result['uuid'] = result['flexgroup_uuid']
-            else:
-                result['uuid'] = None
-
-            # snapshot_auto_delete options
-            auto_delete = dict()
-            attrs = dict(
-                commitment=dict(key_list=['volume-snapshot-autodelete-attributes', 'commitment']),
-                defer_delete=dict(key_list=['volume-snapshot-autodelete-attributes', 'defer-delete']),
-                delete_order=dict(key_list=['volume-snapshot-autodelete-attributes', 'delete-order']),
-                destroy_list=dict(key_list=['volume-snapshot-autodelete-attributes', 'destroy-list']),
-                is_autodelete_enabled=dict(key_list=['volume-snapshot-autodelete-attributes', 'is-autodelete-enabled'], convert_to=bool),
-                prefix=dict(key_list=['volume-snapshot-autodelete-attributes', 'prefix']),
-                target_free_space=dict(key_list=['volume-snapshot-autodelete-attributes', 'target-free-space'], convert_to=int),
-                trigger=dict(key_list=['volume-snapshot-autodelete-attributes', 'trigger']),
-            )
-            self.na_helper.zapi_get_attrs(volume_attributes, attrs, auto_delete)
-            if auto_delete['is_autodelete_enabled'] is not None:
-                auto_delete['state'] = 'on' if auto_delete['is_autodelete_enabled'] else 'off'
-                del auto_delete['is_autodelete_enabled']
-            result['snapshot_auto_delete'] = auto_delete
-
-            self.get_efficiency_info(result)
-
-        return result
-
-    def wrap_fail_json(self, msg, exception=None):
-        for issue in self.issues:
-            self.module.warn(issue)
-        if self.volume_created:
-            msg = 'Volume created with success, with missing attributes: ' + msg
-        self.module.fail_json(msg=msg, exception=exception)
-
-    def create_nas_application_component(self):
-        '''Create application component for nas template'''
-        required_options = ('name', 'size')
-        for option in required_options:
-            if self.parameters.get(option) is None:
-                self.module.fail_json(msg='Error: "%s" is required to create nas application.' % option)
-
-        application_component = dict(
-            name=self.parameters['name'],
-            total_size=self.parameters['size'],
-            share_count=1,      # 1 is the maximum value for nas
-            scale_out=(self.volume_style == 'flexgroup'),
-        )
-        name = self.na_helper.safe_get(self.parameters, ['nas_application_template', 'storage_service'])
-        if name is not None:
-            application_component['storage_service'] = dict(name=name)
-
-        flexcache = self.na_helper.safe_get(self.parameters, ['nas_application_template', 'flexcache'])
-        if flexcache is not None:
-            application_component['flexcache'] = dict(
-                origin=dict(
-                    svm=dict(name=flexcache['origin_svm_name']),
-                    component=dict(name=flexcache['origin_component_name'])
-                )
-            )
-            # scale_out should be absent or set to True for FlexCache
-            del application_component['scale_out']
-            dr_cache = self.na_helper.safe_get(self.parameters, ['nas_application_template', 'flexcache', 'dr_cache'])
-            if dr_cache is not None:
-                application_component['flexcache']['dr_cache'] = dr_cache
-
-        tiering = self.na_helper.safe_get(self.parameters, ['nas_application_template', 'tiering'])
-        if tiering is not None or self.parameters.get('tiering_policy') is not None:
-            application_component['tiering'] = dict()
-            if tiering is None:
-                tiering = dict()
-            if 'policy' not in tiering:
-                tiering['policy'] = self.parameters.get('tiering_policy')
-            for attr in ('control', 'policy', 'object_stores'):
-                value = tiering.get(attr)
-                if attr == 'object_stores' and value is not None:
-                    value = [dict(name=x) for x in value]
-                if value is not None:
-                    application_component['tiering'][attr] = value
-
-        if self.parameters.get('qos_policy') is not None:
-            application_component['qos'] = {
-                "policy": {
-                    "name": self.parameters['qos_policy'],
-                }
+            is_online = (current_state == "online")
+            return_value = {
+                'name': vol_name,
+                'size': current_size,
+                'is_online': is_online
+                'aggregate_name': aggregate_name,
+                'ploicy': policy,
+                'space_guarantee': space_guarantee,
+                'qos_policy_group_name': policy_group_name,
             }
-        if self.parameters.get('export_policy') is not None:
-            application_component['export_policy'] = {
-                "name": self.parameters['export_policy'],
-            }
-        return application_component
 
-    def create_volume_body(self):
-        '''Create body for nas template'''
-        nas = dict(application_components=[self.create_nas_application_component()])
-        value = self.na_helper.safe_get(self.parameters, ['snapshot_policy'])
-        if value is not None:
-            nas['protection_type'] = dict(local_policy=value)
-        for attr in ('nfs_access', 'cifs_access'):
-            value = self.na_helper.safe_get(self.parameters, ['nas_application_template', attr])
-            if value is not None:
-                # we expect value to be a list of dicts, with maybe some empty entries
-                value = self.na_helper.filter_out_none_entries(value)
-                if value:
-                    nas[attr] = value
-        return self.rest_app.create_application_body("nas", nas)
-
-    def create_nas_application(self):
-        '''Use REST application/applications nas template to create a volume'''
-        body, error = self.create_volume_body()
-        self.na_helper.fail_on_error(error)
-        response, error = self.rest_app.create_application(body)
-        self.na_helper.fail_on_error(error)
-        return response
+        return return_value
 
     def create_volume(self):
         '''Create ONTAP volume'''
-        if self.rest_app:
+        aggr_list = []
+        aggr_multiplier = None
+        if self.parameters.get('aggregate_name') is None and self.parameters.get('aggregate_list') is None:
+            self.module.fail_json(msg='Error provisioning volume %s: \
+                                  aggregate_name or aggregate_list is required'
+                                  %s self.parameters['name'])
+
+        elif self.parameters.get('aggregate_name') is not None and self.parameters.get('aggregate_list') is None:
+            options = {'volume': self.parameters['name'],
+                       'containing-aggr-name': self.parameters['aggregate_name'],
+                       'size': str(self.parameters['size'])}
+            if self.parameters.get('percent_snapshot_spact'):
+                options['percentage-snapshot-reserve'] = self.parameters['percent_snapshot_space']
+            if self.parameters.get('type'):
+                 options['volume-type'] = self.parameters['type']
+            if self.parameters.get('policy'):
+                 options['export-policy'] = self.parameters['policy']
+            if self.parameters.get('junction_path'):
+                 options['junction-path'] = self.parameters['junction_path']
+            if self.parameters.get('space_guarantee'):
+                 options['space-reserve'] = self.parameters['space_guarantee']
+            if self.parameters.get('volume_security_style'):
+                 options['volume-security-style'] = self.parameters['volume_security_style']
+            if self.parameters.get('snapshot_policy'):
+                 options['snapshot-policy'] = self.parameters['snapshot_policy']
+            if self.parameters.get('efficiency_policy'):
+                 options['efficiency-policy'] = self.parameters['efficiency_policy']
+            if self.parameters.get('qos_policy_group_name'):
+                 options['qos-policy-group-name'] = self.parameters['qos_policy_group_name']
+            volume_create = netapp_utils.zapi.NaElement.create_node_with_children('volume-create', **options)
+
+        elif self.parameters.get('aggregate_name') is None and self.parameters.get('aggregate_list') is not None:
+            possible_aggregate_list = self.parameters.get( 'aggregate_list' )
+          ##
+          ##
+          ##
+            ##
+            ##
+            ##
+            ##
+            ##
+            ##
+            ##
+            ##
+            ##
+            ##
+            aggr_multiplier = '1'
+            if len( possible_aggregate_list ) < 1:
+                self.module.fail_json( msg='Error provisioning flexgroup %s \
+                                        of size %s: %s'
+                                 % (self.parameters['name'], self.parameters['size'], to_native(error)),
+                                 exception=traceback.format_exec())
+
+            volume_create = netapp_utils.zapi.NaElement ( 'volume-create-async' )
+            zapi_aggr_list = netapp_utils.zapi.NaElement ( 'aggr-list' )
+
+      if self.rest_app:
             return self.create_nas_application()
         if self.volume_style == 'flexgroup':
             return self.create_volume_async()
