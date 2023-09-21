@@ -373,6 +373,51 @@ class NetAppOntapVolume(object):
 
             volume_create = netapp_utils.zapi.NaElement ( 'volume-create-async' )
             zapi_aggr_list = netapp_utils.zapi.NaElement ( 'aggr-list' )
+            for aggr in possible_aggregate_list:
+                zapi_aggr_list.add_new_child( 'aggr-name', aggr )
+            volume_create.add_new_child( 'aggr-list-multiplier', str( aggr_multiplier ) )
+            volume_create.add_new_child( 'size', str( self.parameters['size'] ) )
+            volume_create.add_new_child( 'volume-name', str( self.parameters['name'] ) )
+            volume_create.add_child_elem( zapi_aggr_list )
+
+            if self.parameters.get('percent_snapshot_space'):
+                volume_create.add_new_child( 'percentage-snapshot-reserve', str( self.parameters['percent_snapshot_space'] ) )
+            if self.parameters.get('type'):
+                volume_create.add_new_child( 'volume-type', self.parameters['type'] )
+            if self.parameters.get('policy'):
+                volume_create.add_new_child( 'export-policy', self.parameters['policy'] )
+            if self.parameters.get('junction_path'):
+                volume_create.add_new_child( 'junction-path', self.parameters['junction_path'] )
+            if self.parameters.get('space_guarantee'):
+                volume_create.add_new_child( 'space-reserve', self.parameters['space_guarantee'] )
+            if self.parameters.get('volume_security_stype'):
+                volume_create.add_new_child( 'volume-security-stype', self.parameters['volume_security_stype'] )
+            if self.parameters.get('snapshot_policy'):
+                volume_create.add_new_child( 'snapshot-policy', self.parameters['snapshot_policy'] )
+            if self.parameters.get('efficiency_policy'):
+                volume_create.add_new_child( 'efficiency-policy', self.parameters['efficiency_policy'] )
+            if self.parameters.get('qos_policy_group_name'):
+                volume_create.add_new_child( 'qos-policy-group-name', self.parameters['qos_policy_group_name'] )
+
+        try:
+            volume_create_output = self.server.invoke_successfully(volume_create,
+                                            enable_tunneling=True)
+            self.ems_log_event("volume-create")
+            self.volume_create_facts = {}
+            if aggr_list is not None:
+                self.volume_create_facts['aggr-list'] = aggr_list
+            if aggr multiplier is not None:
+                self.volume_create_facts['aggr-list-multiplier'] = aggr_multiplier
+                self.volume_create_jobid = volume_create_output.get_child_by_name( 'result-jobid' ).get_content()
+                self.volume_create_facts['jobid'] = self.volume_create_jobid
+
+        except netapp_utils.zapi.NaApiError as error:
+            self.module.fail_json(msg='Error provisioning volume %s \
+                                  of size %s: %s'
+                                  % (self.parameters['name'], self.parameters['size'], to_native(error)),
+                                  exception=traceback.format_exc())
+
+  
 
       if self.rest_app:
             return self.create_nas_application()
