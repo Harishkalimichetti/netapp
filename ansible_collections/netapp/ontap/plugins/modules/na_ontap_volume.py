@@ -531,20 +531,19 @@ class NetAppOntapVolume(object):
          else:
            self.module.fail_json(msg='No aggregate_list specified for expanding volume &s' % (self.parameters['name']),exception='ERROR' )
            
+         try:
+             self.server.invoke_successfully(flexgroup_expand,
+                                             enable_tunneling=True)
+             self.ems_log_event("volume-expand")
+         except netapp_utils.zapi.NaApiError as error:
+             self.module.fail_json(msg='Error expanding volume %s: %s'
+                                   % (self.parameters['name'], to_native(error)),
+                                   exception=traceback.format_exc())
 
-    def rest_resize_volume(self):
-        """
-        Re-size the volume using REST PATCH method.
-        """
-        uuid = self.parameters['uuid']
-        if uuid is None:
-            self.module.fail_json(msg='Could not read UUID for volume %s' % self.parameters['name'])
-        body = dict(size=self.parameters['size'])
-        query = dict(sizing_method=self.parameters['sizing_method'])
-        response, error = rest_volume.patch_volume(self.rest_api, uuid, body, query)
-        self.na_helper.fail_on_error(error)
-        return response
+         # self.module.fail_json(msg='Successfully expanded the volume %s' % (self.parameters['name']),exception='NOTICE' )
 
+
+  
     def resize_volume(self):
         """
         Re-size the volume.
@@ -552,685 +551,142 @@ class NetAppOntapVolume(object):
         Note: 'is_infinite' needs to be set to True in order to resize an
         Infinite Volume.
         """
-        if self.parameters.get('sizing_method') is not None:
-            return self.rest_resize_volume()
-
-        vol_size_zapi, vol_name_zapi = ['volume-size-async', 'volume-name']\
-            if (self.parameters['is_infinite'] or self.volume_style == 'flexgroup')\
+        vol_size_zapi, vol_name_zapi = ['volume-size-async', 'volume-name'] if (self.parameters['is_infinite']\
             else ['volume-size', 'volume']
         volume_resize = netapp_utils.zapi.NaElement.create_node_with_children(
             vol_size_zapi, **{vol_name_zapi: self.parameters['name'],
                               'new-size': str(self.parameters['size'])})
         try:
             result = self.server.invoke_successfully(volume_resize, enable_tunneling=True)
-            if vol_size_zapi == 'volume-size-async':
-                self.check_invoke_result(result, 'resize')
             self.ems_log_event("volume-resize")
         except netapp_utils.zapi.NaApiError as error:
             self.module.fail_json(msg='Error re-sizing volume %s: %s'
                                   % (self.parameters['name'], to_native(error)),
                                   exception=traceback.format_exc())
-        return None
 
-    def start_encryption_conversion(self, encrypt_destination):
-        if encrypt_destination:
-            zapi = netapp_utils.zapi.NaElement.create_node_with_children(
-                'volume-encryption-conversion-start', **{'volume': self.parameters['name']})
-            try:
-                self.server.invoke_successfully(zapi, enable_tunneling=True)
-                self.ems_log_event("volume-encryption-conversion-start")
-            except netapp_utils.zapi.NaApiError as error:
-                self.module.fail_json(msg='Error enabling encryption for volume %s: %s'
-                                      % (self.parameters['name'], to_native(error)),
-                                      exception=traceback.format_exc())
-            if self.parameters.get('wait_for_completion'):
-                self.wait_for_volume_encryption_conversion()
-        else:
-            self.module.warn('disabling encryption requires cluster admin permissions.')
-            self.move_volume(encrypt_destination)
-
-    def change_volume_state(self, call_from_delete_vol=False):
+    def change_volume_state(self):
         """
         Change volume's state (offline/online).
         """
-        if self.parameters['is_online'] and not call_from_delete_vol:    # Desired state is online, setup zapi APIs respectively
-            vol_state_zapi, vol_name_zapi, action = ['volume-online-async', 'volume-name', 'online']\
-                if (self.parameters['is_infinite'] or self.volume_style == 'flexgroup')\
-                else ['volume-online', 'name', 'online']
-        else:   # Desired state is offline, setup zapi APIs respectively
-            vol_state_zapi, vol_name_zapi, action = ['volume-offline-async', 'volume-name', 'offline']\
-                if (self.parameters['is_infinite'] or self.volume_style == 'flexgroup')\
-                else ['volume-offline', 'name', 'offline']
-            volume_unmount = netapp_utils.zapi.NaElement.create_node_with_children(
+        if self.parameters['is_online'] # Desired state is online, setup zapi APIs respectively
+            vol_state_zapi, vol_name_zapi, action = ['volume-online-async', 'volume-name'] if self.parameters['is_infinite']\
+                else ['volume-online', 'name']
+        else: # Desired state is offline, setup zapi APIs respectively
+            vol_state_zapi, vol_name_zapi, action = ['volume-offline-async', 'volume-name'] if self.parameters['is_infinite']\
+                else ['volume-offline', 'name']
+          volume_unmount = netapp_utils.zapi.NaElement.create_node_with_children(
                 'volume-unmount', **{'volume-name': self.parameters['name']})
         volume_change_state = netapp_utils.zapi.NaElement.create_node_with_children(
             vol_state_zapi, **{vol_name_zapi: self.parameters['name']})
-
-        errors = list()
-        if not self.parameters['is_online'] or call_from_delete_vol:  # Unmount before offline
-            try:
-                self.server.invoke_successfully(volume_unmount, enable_tunneling=True)
-            except netapp_utils.zapi.NaApiError as error:
-                errors.append('Error unmounting volume %s: %s' % (self.parameters['name'], to_native(error)))
         try:
-            result = self.server.invoke_successfully(volume_change_state, enable_tunneling=True)
-            if self.volume_style == 'flexgroup' or self.parameters['is_infinite']:
-                self.check_invoke_result(result, action)
-            self.ems_log_event("change-state")
+            if not self.parameters['is_online']: # Unmount before offline
+               self.server.invoke_successfully(volume_unmount, enable_tunneling=True)
+           self.server.invoke_successfully(volume_change_state, enable_tunneling=True)
+           self.ems_log_event("change-state")
         except netapp_utils.zapi.NaApiError as error:
-            state = "online" if self.parameters['is_online'] and not call_from_delete_vol else "offline"
-            errors.append('Error changing the state of volume %s to %s: %s' % (self.parameters['name'], state, to_native(error)))
-            self.module.fail_json(msg=', '.join(errors),
+            state = "online" if self.parameters['is_online'] else "offline"
+            self.module.fail_json(msg='Error changing the state of volume %s to %s: %s'
+                                  % (self.parameters['name'], state, to_native(errors)),
                                   exception=traceback.format_exc())
 
-    def create_volume_attribute(self, zapi_object, parent_attribute, attribute, value):
+    def volume_modify_policy_space(self):
         """
-
-        :param parent_attribute:
-        :param child_attribute:
-        :param value:
-        :return:
+        modify volume parameter 'policy' or 'space_gurantee'
         """
-        if isinstance(parent_attribute, str):
-            vol_attribute = netapp_utils.zapi.NaElement(parent_attribute)
-            vol_attribute.add_new_child(attribute, value)
-            zapi_object.add_child_elem(vol_attribute)
-        else:
-            zapi_object.add_new_child(attribute, value)
-            parent_attribute.add_child_elem(zapi_object)
-
-    def volume_modify_attributes(self, params):
-        """
-        modify volume parameter 'export_policy','unix_permissions','snapshot_policy','space_guarantee', 'percent_snapshot_space',
-                                'qos_policy_group', 'qos_adaptive_policy_group'
-        """
-        if self.volume_style == 'flexgroup' or self.parameters['is_infinite']:
-            vol_mod_iter = netapp_utils.zapi.NaElement('volume-modify-iter-async')
-        else:
-            vol_mod_iter = netapp_utils.zapi.NaElement('volume-modify-iter')
+        #
+        vol_mod_iter= netapp_utils.zapi.NaElement('volume-modify-iter')
         attributes = netapp_utils.zapi.NaElement('attributes')
-        vol_mod_attributes = netapp_utils.zapi.NaElement('volume-attributes')
-        # Volume-attributes is split in to 25 sub categories
-        if params and 'encrypt' in params:
-            vol_mod_attributes.add_new_child('encrypt', self.na_helper.get_value_for_bool(False, self.parameters['encrypt']))
-        # volume-space-attributes
-        vol_space_attributes = netapp_utils.zapi.NaElement('volume-space-attributes')
-        if self.parameters.get('space_guarantee') is not None:
-            self.create_volume_attribute(vol_space_attributes, vol_mod_attributes,
-                                         'space-guarantee', self.parameters['space_guarantee'])
-        if self.parameters.get('percent_snapshot_space') is not None:
-            self.create_volume_attribute(vol_space_attributes, vol_mod_attributes,
-                                         'percentage-snapshot-reserve', str(self.parameters['percent_snapshot_space']))
-        if self.parameters.get('space_slo') is not None:
-            self.create_volume_attribute(vol_space_attributes, vol_mod_attributes, 'space-slo', self.parameters['space_slo'])
-        # volume-snapshot-attributes
-        vol_snapshot_attributes = netapp_utils.zapi.NaElement('volume-snapshot-attributes')
-        if self.parameters.get('snapshot_policy') is not None:
-            self.create_volume_attribute(vol_snapshot_attributes, vol_mod_attributes,
-                                         'snapshot-policy', self.parameters['snapshot_policy'])
-        if self.parameters.get('snapdir_access') is not None:
-            self.create_volume_attribute(vol_snapshot_attributes, vol_mod_attributes,
-                                         'snapdir-access-enabled',
-                                         self.na_helper.get_value_for_bool(False, self.parameters['snapdir_access'], 'snapdir_access'))
-        # volume-export-attributes
-        if self.parameters.get('export_policy') is not None:
-            self.create_volume_attribute(vol_mod_attributes, 'volume-export-attributes',
-                                         'policy', self.parameters['export_policy'])
-        # volume-security-attributes
-        if self.parameters.get('unix_permissions') is not None or self.parameters.get('group_id') is not None or self.parameters.get('user_id') is not None:
-            vol_security_attributes = netapp_utils.zapi.NaElement('volume-security-attributes')
-            vol_security_unix_attributes = netapp_utils.zapi.NaElement('volume-security-unix-attributes')
-            if self.parameters.get('unix_permissions') is not None:
-                self.create_volume_attribute(vol_security_unix_attributes, vol_security_attributes,
-                                             'permissions', self.parameters['unix_permissions'])
-            if self.parameters.get('group_id') is not None:
-                self.create_volume_attribute(vol_security_unix_attributes, vol_security_attributes,
-                                             'group-id', str(self.parameters['group_id']))
-            if self.parameters.get('user_id') is not None:
-                self.create_volume_attribute(vol_security_unix_attributes, vol_security_attributes,
-                                             'user-id', str(self.parameters['user_id']))
-            vol_mod_attributes.add_child_elem(vol_security_attributes)
-        if params and params.get('volume_security_style') is not None:
-            self.create_volume_attribute(vol_mod_attributes, 'volume-security-attributes',
-                                         'style', self.parameters['volume_security_style'])
-
-        # volume-performance-attributes
-        if self.parameters.get('atime_update') is not None:
-            self.create_volume_attribute(vol_mod_attributes, 'volume-performance-attributes',
-                                         'is-atime-update-enabled', self.na_helper.get_value_for_bool(False, self.parameters['atime_update'], 'atime_update'))
-        # volume-qos-attributes
-        if self.parameters.get('qos_policy_group') is not None:
-            self.create_volume_attribute(vol_mod_attributes, 'volume-qos-attributes',
-                                         'policy-group-name', self.parameters['qos_policy_group'])
-        if self.parameters.get('qos_adaptive_policy_group') is not None:
-            self.create_volume_attribute(vol_mod_attributes, 'volume-qos-attributes',
-                                         'adaptive-policy-group-name', self.parameters['qos_adaptive_policy_group'])
-        # volume-comp-aggr-attributes
-        if params and params.get('tiering_policy') is not None:
-            self.create_volume_attribute(vol_mod_attributes, 'volume-comp-aggr-attributes',
-                                         'tiering-policy', self.parameters['tiering_policy'])
-        # volume-state-attributes
-        if self.parameters.get('nvfail_enabled') is not None:
-            self.create_volume_attribute(vol_mod_attributes, 'volume-state-attributes', 'is-nvfail-enabled', str(self.parameters['nvfail_enabled']))
-        # volume-dr-protection-attributes
-        if self.parameters.get('vserver_dr_protection') is not None:
-            self.create_volume_attribute(vol_mod_attributes, 'volume-vserver-dr-protection-attributes',
-                                         'vserver-dr-protection', self.parameters['vserver_dr_protection'])
-        # volume-id-attributes
-        if self.parameters.get('comment') is not None:
-            self.create_volume_attribute(vol_mod_attributes, 'volume-id-attributes',
-                                         'comment', self.parameters['comment'])
-        # End of Volume-attributes sub attributes
+        vol_mod_attributes = netapp_utils.zapi.NaElement('volume-attributes')f
+        if self.parameters.get('policy'):
+            vol_export_attributes = netapp_utils.zapi,NaElement(
+                'volume-export-attibutes')
+            vol_export_attributes.add_new_child('policy', self.parameters['policy'])
+            vol_mod_attributes.add_child_elem(vol_export_attributes)
+        if self.parameters.get('space_guarantee'):
+            vol_space_attributes = netapp_utils.zapi.NaElement(
+                'volume-space-attributes')
+            vol_space_attributes.add_new_child(
+                'space-gaurantee', self.parameters['space_guarantee'])
+            vol_mod_attributes.add_child_elem(vol_space_attributes)
+        if self.parameters.get('qos_policy_group_name'):
+            vol_qos_attributes = netapp_utils.zapi.NaElement(
+                'volume-qos-attributes')
+            vol_qos_attributes.add_new_child(
+                policy_group-name', self.parameters['qos_policy_group_name'])
+            vol_mod_attributes.add_child_elem(vol_qos_attributes)
         attributes.add_child_elem(vol_mod_attributes)
         query = netapp_utils.zapi.NaElement('query')
         vol_query_attributes = netapp_utils.zapi.NaElement('volume-attributes')
-        self.create_volume_attribute(vol_query_attributes, 'volume-id-attributes',
-                                     'name', self.parameters['name'])
+        vol_id_attributes = netapp_utils.zapi.NaElement('volume-id-attributes')
+        vol_id_attributes.add_new_child('name', self.parameters['name'])
+        vol_query_attributes.add_child_elem(vol_id_attributes)
         query.add_child_elem(vol_query_attributes)
         vol_mod_iter.add_child_elem(attributes)
         vol_mod_iter.add_child_elem(query)
         try:
-            result = self.server.invoke_successfully(vol_mod_iter, enable_tunneling=True)
+            result: self.server.invoke_successfully(vol_mod_iter, enable_tunneling=True)
+            failure = result.get_child_by_name('failure-list')
+            #
+            if failure is not None and failures.get_child_by_name('volume-modify-iter-info') is not None:
+                error_msg = failures.get_child_by_name('volume-modify-iter-info').get_child_content('error-message')
+                self.module.fail_json(msg="Error modifying volume %s: %s"
+                                      % (self.parameters['name'], error_msg),
+                                      exception=traceback.format_exc())
+            self.ems_log_event('volume-modify")
         except netapp_utils.zapi.NaApiError as error:
-            error_msg = to_native(error)
-            if 'volume-comp-aggr-attributes' in error_msg:
-                error_msg += ". Added info: tiering option requires 9.4 or later."
-            self.wrap_fail_json(msg='Error modifying volume %s: %s'
-                                % (self.parameters['name'], error_msg),
-                                exception=traceback.format_exc())
-
-        self.ems_log_event("volume-modify")
-        failures = result.get_child_by_name('failure-list')
-        # handle error if modify space, policy, or unix-permissions parameter fails
-        if failures is not None:
-            error_msgs = list()
-            for return_info in ('volume-modify-iter-info', 'volume-modify-iter-async-info'):
-                if failures.get_child_by_name(return_info) is not None:
-                    error_msgs.append(failures.get_child_by_name(return_info).get_child_content('error-message'))
-            if error_msgs and any([x is not None for x in error_msgs]):
-                self.wrap_fail_json(msg="Error modifying volume %s: %s"
-                                    % (self.parameters['name'], ' --- '.join(error_msgs)),
-                                    exception=traceback.format_exc())
-        if self.volume_style == 'flexgroup' or self.parameters['is_infinite']:
-            success = result.get_child_by_name('success-list')
-            success = success.get_child_by_name('volume-modify-iter-async-info')
-            results = dict()
-            for key in ('status', 'jobid'):
-                if success and success.get_child_by_name(key):
-                    results[key] = success[key]
-            status = results.get('status')
-            if status == 'in_progress' and 'jobid' in results:
-                if self.parameters['time_out'] == 0:
-                    return
-                error = self.check_job_status(results['jobid'])
-                if error is None:
-                    return
-                self.wrap_fail_json(msg='Error when modifying volume: %s' % error)
-            self.wrap_fail_json(msg='Unexpected error when modifying volume: result is: %s' % str(result.to_string()))
-
-    def volume_mount(self):
-        """
-        Mount an existing volume in specified junction_path
-        :return: None
-        """
-        vol_mount = netapp_utils.zapi.NaElement('volume-mount')
-        vol_mount.add_new_child('volume-name', self.parameters['name'])
-        vol_mount.add_new_child('junction-path', self.parameters['junction_path'])
-        try:
-            self.server.invoke_successfully(vol_mount, enable_tunneling=True)
-        except netapp_utils.zapi.NaApiError as error:
-            self.module.fail_json(msg='Error mounting volume %s on path %s: %s'
-                                  % (self.parameters['name'], self.parameters['junction_path'],
-                                     to_native(error)), exception=traceback.format_exc())
-
-    def volume_unmount(self):
-        """
-        Unmount an existing volume
-        :return: None
-        """
-        vol_unmount = netapp_utils.zapi.NaElement.create_node_with_children(
-            'volume-unmount', **{'volume-name': self.parameters['name']})
-        try:
-            self.server.invoke_successfully(vol_unmount, enable_tunneling=True)
-        except netapp_utils.zapi.NaApiError as error:
-            self.module.fail_json(msg='Error unmounting volume %s: %s'
-                                  % (self.parameters['name'], to_native(error)), exception=traceback.format_exc())
+            self.module.fail_json(msg='Error modifying volume %s: %s'
+                                  % (self.parameters['name'], to_native(error)),
+                                  exception=traceback.foramt_exc())
 
     def modify_volume(self, modify):
-        '''Modify volume action'''
-        attributes = modify.keys()
-        # order matters here, if both is_online and mount in modify, must bring the volume online first.
-        if 'is_online' in attributes:
-            self.change_volume_state()
-        for attribute in attributes:
-            if attribute in ['space_guarantee', 'export_policy', 'unix_permissions', 'group_id', 'user_id', 'tiering_policy',
-                             'snapshot_policy', 'percent_snapshot_space', 'snapdir_access', 'atime_update', 'volume_security_style',
-                             'nvfail_enabled', 'space_slo', 'qos_policy_group', 'qos_adaptive_policy_group', 'vserver_dr_protection', 'comment']:
-                self.volume_modify_attributes(modify)
-                break
-        if 'snapshot_auto_delete' in attributes:
-            self.set_snapshot_auto_delete()
-        if 'junction_path' in attributes:
-            if modify.get('junction_path') == '':
-                self.volume_unmount()
-            else:
-                self.volume_mount()
-        if 'size' in attributes:
-            self.resize_volume()
-        if 'aggregate_name' in attributes:
-            # keep it last, as it may take some time
-            # handle change in encryption as part of the move
-            self.move_volume(self.parameters.get('encrypt'))
-        elif 'encrypt' in attributes:
-            self.start_encryption_conversion(self.parameters['encrypt'])
-
-    def compare_chmod_value(self, current):
-        """
-        compare current unix_permissions to desire unix_permissions.
-        :return: True if the same, False it not the same or desire unix_permissions is not valid.
-        """
-        desire = self.parameters
-        if current is None:
-            return False
-        octal_value = ''
-        unix_permissions = desire['unix_permissions']
-        if unix_permissions.isdigit():
-            return int(current['unix_permissions']) == int(unix_permissions)
+        for attribute in modify.keys():
+            if attribute == 'size':
+                self.resize_volume()
+            elif attrattribute == 'is_online':
+                self.change_volume_state()
+        elif attribute == 'aggregate_name':
+            self.move_volume()
         else:
-            if len(unix_permissions) != 12:
-                return False
-            if unix_permissions[:3] != '---':
-                return False
-            for i in range(3, len(unix_permissions), 3):
-                if unix_permissions[i] not in ['r', '-'] or unix_permissions[i + 1] not in ['w', '-']\
-                        or unix_permissions[i + 2] not in ['x', '-']:
-                    return False
-                group_permission = self.char_to_octal(unix_permissions[i:i + 3])
-                octal_value += str(group_permission)
-            return int(current['unix_permissions']) == int(octal_value)
-
-    def char_to_octal(self, chars):
-        """
-        :param chars: Characters to be converted into octal values.
-        :return: octal value of the individual group permission.
-        """
-        total = 0
-        if chars[0] == 'r':
-            total += 4
-        if chars[1] == 'w':
-            total += 2
-        if chars[2] == 'x':
-            total += 1
-        return total
-
-    def get_volume_style(self, current):
-        '''Get volume style, infinite or standard flexvol'''
-        if current is not None:
-            return current.get('style_extended')
-        if self.parameters.get('aggr_list') or self.parameters.get('aggr_list_multiplier') or self.parameters.get('auto_provision_as'):
-            return 'flexgroup'
-        return None
-
-    def get_job(self, jobid, server):
-        """
-        Get job details by id
-        """
-        job_get = netapp_utils.zapi.NaElement('job-get')
-        job_get.add_new_child('job-id', jobid)
-        try:
-            result = server.invoke_successfully(job_get, enable_tunneling=True)
-        except netapp_utils.zapi.NaApiError as error:
-            if to_native(error.code) == "15661":
-                # Not found
-                return None
-            self.wrap_fail_json(msg='Error fetching job info: %s' % to_native(error),
-                                exception=traceback.format_exc())
-        job_info = result.get_child_by_name('attributes').get_child_by_name('job-info')
-        results = {
-            'job-progress': job_info['job-progress'],
-            'job-state': job_info['job-state']
-        }
-        if job_info.get_child_by_name('job-completion') is not None:
-            results['job-completion'] = job_info['job-completion']
-        else:
-            results['job-completion'] = None
-        return results
-
-    def check_job_status(self, jobid):
-        """
-        Loop until job is complete
-        """
-        server = self.server
-        sleep_time = 5
-        time_out = self.parameters['time_out']
-        results = self.get_job(jobid, server)
-        error = 'timeout'
-
-        while time_out > 0:
-            results = self.get_job(jobid, server)
-            # If running as cluster admin, the job is owned by cluster vserver
-            # rather than the target vserver.
-            if results is None and server == self.server:
-                results = netapp_utils.get_cserver(self.server)
-                server = netapp_utils.setup_na_ontap_zapi(module=self.module, vserver=results)
-                continue
-            if results is None:
-                error = 'cannot locate job with id: %d' % int(jobid)
-                break
-            if results['job-state'] in ('queued', 'running'):
-                time.sleep(sleep_time)
-                time_out -= sleep_time
-                continue
-            if results['job-state'] in ('success', 'failure'):
-                break
-            else:
-                self.wrap_fail_json(msg='Unexpected job status in: %s' % repr(results))
-
-        if results is not None:
-            if results['job-state'] == 'success':
-                error = None
-            elif results['job-state'] in ('queued', 'running'):
-                error = 'job completion exceeded expected timer of: %s seconds' % \
-                        self.parameters['time_out']
-            else:
-                if results['job-completion'] is not None:
-                    error = results['job-completion']
-                else:
-                    error = results['job-progress']
-        return error
-
-    def check_invoke_result(self, result, action):
-        '''
-        check invoked api call back result.
-        '''
-        results = dict()
-        for key in ('result-status', 'result-jobid'):
-            if result.get_child_by_name(key):
-                results[key] = result[key]
-        status = results.get('result-status')
-        if status == 'in_progress' and 'result-jobid' in results:
-            if self.parameters['time_out'] == 0:
-                return
-            error = self.check_job_status(results['result-jobid'])
-            if error is None:
-                return
-            else:
-                self.wrap_fail_json(msg='Error when %s volume: %s' % (action, error))
-        if status == 'failed':
-            self.wrap_fail_json(msg='Operation failed when %s volume.' % action)
-
-    def set_efficiency_attributes(self, options):
-        for key, attr in self.sis_keys2zapi_set.items():
-            value = self.parameters.get(key)
-            if value is not None:
-                if self.argument_spec[key]['type'] == 'bool':
-                    value = self.na_helper.get_value_for_bool(False, value)
-                options[attr] = value
-        # ZAPI requires compression to be set for inline-compression
-        if options.get('enable-inline-compression') == 'true' and 'enable-compression' not in options:
-            options['enable-compression'] = 'true'
-
-    def set_efficiency_config(self):
-        '''Set efficiency policy and compression attributes'''
-        options = {'path': '/vol/' + self.parameters['name']}
-        efficiency_enable = netapp_utils.zapi.NaElement.create_node_with_children('sis-enable', **options)
-        try:
-            self.server.invoke_successfully(efficiency_enable, enable_tunneling=True)
-        except netapp_utils.zapi.NaApiError as error:
-            # Error 40043 denotes an Operation has already been enabled.
-            if to_native(error.code) == "40043":
-                pass
-            else:
-                self.wrap_fail_json(msg='Error enable efficiency on volume %s: %s'
-                                    % (self.parameters['name'], to_native(error)),
-                                    exception=traceback.format_exc())
-
-        self.set_efficiency_attributes(options)
-        efficiency_start = netapp_utils.zapi.NaElement.create_node_with_children('sis-set-config', **options)
-        try:
-            self.server.invoke_successfully(efficiency_start, enable_tunneling=True)
-        except netapp_utils.zapi.NaApiError as error:
-            self.wrap_fail_json(msg='Error setting up efficiency attributes on volume %s: %s'
-                                % (self.parameters['name'], to_native(error)),
-                                exception=traceback.format_exc())
-
-    def set_efficiency_config_async(self):
-        """Set efficiency policy and compression attributes in asynchronous mode"""
-        options = {'volume-name': self.parameters['name']}
-        efficiency_enable = netapp_utils.zapi.NaElement.create_node_with_children('sis-enable-async', **options)
-        try:
-            result = self.server.invoke_successfully(efficiency_enable, enable_tunneling=True)
-        except netapp_utils.zapi.NaApiError as error:
-            self.wrap_fail_json(msg='Error enable efficiency on volume %s: %s'
-                                % (self.parameters['name'], to_native(error)),
-                                exception=traceback.format_exc())
-        self.check_invoke_result(result, 'enable efficiency on')
-
-        self.set_efficiency_attributes(options)
-        efficiency_start = netapp_utils.zapi.NaElement.create_node_with_children('sis-set-config-async', **options)
-        try:
-            result = self.server.invoke_successfully(efficiency_start, enable_tunneling=True)
-        except netapp_utils.zapi.NaApiError as error:
-            self.wrap_fail_json(msg='Error setting up efficiency attributes on volume %s: %s'
-                                % (self.parameters['name'], to_native(error)),
-                                exception=traceback.format_exc())
-        self.check_invoke_result(result, 'set efficiency policy on')
-
-    def get_efficiency_info(self, return_value):
-        """
-        get the name of the efficiency policy assigned to volume, as well as compression values
-        if attribute does not exist, set its value to None
-        :return: update return_value dict.
-        """
-        sis_info = netapp_utils.zapi.NaElement('sis-get-iter')
-        sis_status_info = netapp_utils.zapi.NaElement('sis-status-info')
-        sis_status_info.add_new_child('path', '/vol/' + self.parameters['name'])
-        query = netapp_utils.zapi.NaElement('query')
-        query.add_child_elem(sis_status_info)
-        sis_info.add_child_elem(query)
-        try:
-            result = self.server.invoke_successfully(sis_info, True)
-        except netapp_utils.zapi.NaApiError as error:
-            # Don't error out if efficiency settings cannot be read.  We'll fail if they need to be set.
-            if error.message.startswith('Insufficient privileges: user ') and error.message.endswith(' does not have read access to this resource'):
-                self.issues.append('cannot read volume efficiency options (as expected when running as vserver): %s' % to_native(error))
-                return
-            self.wrap_fail_json(msg='Error fetching efficiency policy for volume %s : %s'
-                                % (self.parameters['name'], to_native(error)),
-                                exception=traceback.format_exc())
-        for key in self.sis_keys2zapi_get:
-            return_value[key] = None
-        if result.get_child_by_name('num-records') and int(result.get_child_content('num-records')) >= 1:
-            sis_attributes = result.get_child_by_name('attributes-list'). get_child_by_name('sis-status-info')
-            for key, attr in self.sis_keys2zapi_get.items():
-                value = sis_attributes.get_child_content(attr)
-                if self.argument_spec[key]['type'] == 'bool':
-                    value = self.na_helper.get_value_for_bool(True, value)
-                return_value[key] = value
-
-    def modify_volume_efficiency_config(self, efficiency_config_modify_value):
-        if efficiency_config_modify_value == 'async':
-            self.set_efficiency_config_async()
-        else:
-            self.set_efficiency_config()
-
-    def set_snapshot_auto_delete(self):
-        options = {'volume': self.parameters['name']}
-        desired_options = self.parameters['snapshot_auto_delete']
-        for key, value in desired_options.items():
-            options['option-name'] = key
-            options['option-value'] = str(value)
-            snapshot_auto_delete = netapp_utils.zapi.NaElement.create_node_with_children('snapshot-autodelete-set-option', **options)
-            try:
-                self.server.invoke_successfully(snapshot_auto_delete, enable_tunneling=True)
-            except netapp_utils.zapi.NaApiError as error:
-                self.wrap_fail_json(msg='Error setting snapshot auto delete options for volume %s: %s'
-                                    % (self.parameters['name'], to_native(error)),
-                                    exception=traceback.format_exc())
-
-    def rehost_volume(self):
-        volume_rehost = netapp_utils.zapi.NaElement.create_node_with_children(
-            'volume-rehost', **{'vserver': self.parameters['from_vserver'],
-                                'destination-vserver': self.parameters['vserver'],
-                                'volume': self.parameters['name']})
-        if self.parameters.get('auto_remap_luns') is not None:
-            volume_rehost.add_new_child('auto-remap-luns', str(self.parameters['auto_remap_luns']))
-        if self.parameters.get('force_unmap_luns') is not None:
-            volume_rehost.add_new_child('force-unmap-luns', str(self.parameters['force_unmap_luns']))
-        try:
-            self.cluster.invoke_successfully(volume_rehost, enable_tunneling=True)
-            self.ems_log_event("volume-rehost")
-        except netapp_utils.zapi.NaApiError as error:
-            self.module.fail_json(msg='Error rehosting volume %s: %s'
-                                  % (self.parameters['name'], to_native(error)),
-                                  exception=traceback.format_exc())
-
-    def snapshot_restore_volume(self):
-        snapshot_restore = netapp_utils.zapi.NaElement.create_node_with_children(
-            'snapshot-restore-volume', **{'snapshot': self.parameters['snapshot_restore'],
-                                          'volume': self.parameters['name']})
-        if self.parameters.get('force_restore') is not None:
-            snapshot_restore.add_new_child('force', str(self.parameters['force_restore']))
-        if self.parameters.get('preserve_lun_ids') is not None:
-            snapshot_restore.add_new_child('preserve-lun-ids', str(self.parameters['preserve_lun_ids']))
-        try:
-            self.server.invoke_successfully(snapshot_restore, enable_tunneling=True)
-            self.ems_log_event("snapshot-restore-volume")
-        except netapp_utils.zapi.NaApiError as error:
-            self.module.fail_json(msg='Error restoring volume %s: %s'
-                                  % (self.parameters['name'], to_native(error)),
-                                  exception=traceback.format_exc())
-
-    def adjust_size(self, current, after_create):
-        """
-        ignore small change in size by resetting expectations
-        """
-        if after_create:
-            # ignore change in size immediately after a create:
-            self.parameters['size'] = current['size']
-        elif self.parameters['size_change_threshold'] > 0:
-            if 'size' in current and self.parameters.get('size') is not None:
-                # ignore a less than XX% difference
-                if abs(current['size'] - self.parameters['size']) * 100 / current['size'] < self.parameters['size_change_threshold']:
-                    self.parameters['size'] = current['size']
-
-    def set_modify_dict(self, current, after_create=False):
-        '''Fill modify dict with changes'''
-        # snapshot_auto_delete's value is a dict, get_modified_attributes function doesn't support dict as value.
-        auto_delete_info = current.pop('snapshot_auto_delete', None)
-        # ignore small changes in size by adjusting self.parameters['size']
-        self.adjust_size(current, after_create)
-        modify = self.na_helper.get_modified_attributes(current, self.parameters)
-        if modify is not None and 'type' in modify:
-            msg = "Error: changing a volume from one type to another is not allowed."
-            msg += '  Current: %s, desired: %s.' % (current['type'], self.parameters['type'])
-            self.module.fail_json(msg=msg)
-        desired_style = self.get_volume_style(None)
-        if desired_style is not None and desired_style != self.volume_style:
-            msg = "Error: changing a volume from one backend to another is not allowed."
-            msg += '  Current: %s, desired: %s.' % (self.volume_style, desired_style)
-            self.module.fail_json(msg=msg)
-        if self.parameters.get('snapshot_auto_delete') is not None:
-            auto_delete_modify = self.na_helper.get_modified_attributes(auto_delete_info,
-                                                                        self.parameters['snapshot_auto_delete'])
-            if len(auto_delete_modify) > 0:
-                modify['snapshot_auto_delete'] = auto_delete_modify
-        return modify
-
-    def take_modify_actions(self, modify):
-        if modify.get('is_online'):
-            # when moving to online, include parameters that get does not return when volume is offline
-            for field in ['volume_security_style', 'group_id', 'user_id', 'percent_snapshot_space']:
-                if self.parameters.get(field) is not None:
-                    modify[field] = self.parameters[field]
-        self.modify_volume(modify)
-
-        if any([modify.get(key) is not None for key in self.sis_keys2zapi_get]):
-            if self.parameters.get('is_infinite') or self.volume_style == 'flexgroup':
-                efficiency_config_modify = 'async'
-            else:
-                efficiency_config_modify = 'sync'
-            self.modify_volume_efficiency_config(efficiency_config_modify)
+            self.volume_modify_policy_space()
 
     def apply(self):
         '''Call create/modify/delete operations'''
-        response = None
-        modify_after_create = None
         current = self.get_volume()
-        self.volume_style = self.get_volume_style(current)
-        if self.volume_style == 'flexgroup' and self.parameters.get('aggregate_name') is not None:
-            self.module.fail_json(msg='Error: aggregate_name option cannot be used with FlexGroups.')
-        rename, rehost, snapshot_restore, cd_action, modify = None, None, None, None, None
-        # rename and create are mutually exclusive
+        # expand, rename and create are mutually exclusive
+        expand, rename, cd_action = None, None, None
         if self.parameters.get('from_name'):
             rename = self.na_helper.is_rename_action(self.get_volume(self.parameters['from_name']), current)
-        elif self.parameters.get('from_vserver'):
-            rehost = True
-            self.na_helper.changed = True
-        elif self.parameters.get('snapshot_restore'):
-            snapshot_restore = True
-            self.na_helper.changed = True
         else:
-            cd_action = self.na_helper.get_cd_action(current, self.parameters)
-        if self.parameters.get('unix_permissions') is not None:
-            # current stores unix_permissions' numeric value.
-            # unix_permission in self.parameter can be either numeric or character.
-            if self.compare_chmod_value(current) or not self.parameters['is_online']:
-                # don't change if the values are the same
-                # can't change permissions if not online
-                del self.parameters['unix_permissions']
-        if cd_action is None and rename is None and rehost is None and self.parameters['state'] == 'present':
-            modify = self.set_modify_dict(current)
-        if self.parameters.get('nas_application_template') is not None:
-            application = self.get_application()
-            changed = self.na_helper.changed
-            modify_app = self.na_helper.get_modified_attributes(application, self.parameters.get('nas_application_template'))
-            # restore current change state, as we ignore this
-            if modify_app:
-                self.na_helper.changed = changed
-                self.module.warn('Modifying an app is not supported at present: ignoring: %s' % str(modify_app))
-
+            if self.parameters.get('state') == 'expand':
+              expand = 'True'
+            else:
+              cd_action = self.na_helper.get_cd_action(current, self.parameters)
+        modify = self.na_helper.get_modified_attributes(current, self.paremeters)
         if self.na_helper.changed:
             if self.module.check_mode:
                 pass
             else:
                 if rename:
                     self.rename_volume()
-                if rehost:
-                    self.rehost_volume()
-                if snapshot_restore:
-                    self.snapshot_restore_volume()
                 if cd_action == 'create':
-                    response = self.create_volume()
-                    # if we create using ZAPI and modify only options are set (snapdir_access or atime_update), we need to run a modify.
-                    # The modify also takes care of efficiency (sis) parameters and snapshot_auto_delete.
-                    # If we create using REST application, some options are not available, we may need to run a modify.
-                    current = self.get_volume()
-                    if current:
-                        self.volume_created = True
-                        modify_after_create = self.set_modify_dict(current, after_create=True)
-                        if modify_after_create:
-                            self.take_modify_actions(modify_after_create)
-                    # restore this, as set_modify_dict could set it to False
-                    self.na_helper.changed = True
+                    self.create_volume()
                 elif cd_action == 'delete':
-                    self.parameters['uuid'] = current['uuid']
-                    self.delete_volume(current)
+                    self.delete_volune()
                 elif modify:
-                    self.parameters['uuid'] = current['uuid']
-                    self.take_modify_actions(modify)
+                    self.modify_volume(modify)
+        else:
+          if self.module.check_mode:
+                pass
+        else:
+          if expand:
+             self.expand_flexgroup()
+             self.module.exit_json(changed='true')
 
-        result = dict(
-            changed=self.na_helper.changed
-        )
-        if response is not None:
-            result['response'] = response
-        if modify:
-            result['modify'] = modify
-        if modify_after_create:
-            result['modify_after_create'] = modify_after_create
-        self.module.exit_json(**result)
-
+        if cd_action == 'create':
+            self.module.exit_json(changed=self.na_helper.changed,ansible_facts={'volume-create-faacts': self.volume_create_facts } )
+        else:
+             self.module_exit_json(changed=self.na_helper.changed)
+                   
     def ems_log_event(self, state):
         '''Autosupport log event'''
         if state == 'create':
@@ -1245,10 +701,6 @@ class NetAppOntapVolume(object):
         elif state == 'volume-resize':
             message = "A Volume has been resized to: " + \
                 str(self.parameters['size']) + str(self.parameters['size_unit'])
-        elif state == 'volume-rehost':
-            message = "A Volume has been rehosted"
-        elif state == 'snapshot-restore-volume':
-            message = "A Volume has been restored by snapshot"
         elif state == 'volume-change':
             message = "A Volume state has been changed"
         else:
