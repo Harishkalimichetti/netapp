@@ -417,284 +417,80 @@ class NetAppOntapVolume(object):
                                   % (self.parameters['name'], self.parameters['size'], to_native(error)),
                                   exception=traceback.format_exc())
 
-  
+        #if self.volume_create_jobid is not None:
+        if aggr_multiplier is not None:
+            ## Ok, we're dealing with a FlexGroup here since we've received a jobid
+            ## Let's keep polling the cluster for the status of the job id
+            time.sleep(5)
+            retry_limt = 90
+            retry = 0
+            success = False
 
-      if self.rest_app:
-            return self.create_nas_application()
-        if self.volume_style == 'flexgroup':
-            return self.create_volume_async()
+            while retry <= retry_limit and not success:
+                retry+=1
 
-        options = self.create_volume_options()
-        volume_create = netapp_utils.zapi.NaElement.create_node_with_children('volume-create', **options)
-        try:
-            self.server.invoke_successfully(volume_create, enable_tunneling=True)
-        except netapp_utils.zapi.NaApiError as error:
-            size_msg = ' of size %s' % self.parameters['size'] if self.parameters.get('size') is not None else ''
-            self.module.fail_json(msg='Error provisioning volume %s%s: %s'
-                                  % (self.parameters['name'], size_msg, to_native(error)),
-                                  exception=traceback.format_exc())
-        self.ems_log_event("volume-create")
-
-        if self.parameters.get('wait_for_completion'):
-            # round off time_out
-            retries = (self.parameters['time_out'] + 5) // 10
-            is_online = None
-            errors = list()
-            while not is_online and retries > 0:
                 try:
-                    current = self.get_volume()
-                    is_online = None if current is None else current['is_online']
-                except KeyError as err:
-                    # get_volume may receive incomplete data as the volume is being created
-                    errors.append(repr(err))
-                if not is_online:
-                    time.sleep(10)
-                retries = retries - 1
-            if not is_online:
-                errors.append("Timeout after %s seconds" % self.parameters['time_out'])
-                self.module.fail_json(msg='Error waiting for volume %s to come online: %s'
-                                      % (self.parameters['name'], str(errors)))
-        return None
+                    job_info = netapp_utils.zapi.NaElement('job-get-iter')
+                    query_details = netapp_utils.zapi.NaElement.create_node_with_children('job-info', **{'job-id': self.volume_create_jobid})
+                    query = netapp_utils.zapi.NaElement('query')
+                    query.add_child_elem(query_details)
+                    job_info.add_child_elem(query)
+                    ##
+                    ##
+                    ##
+                    ##
+                    result = self.server.invoke_successfully( job_info, enable_tunneling=False )
+                    changed = True
 
-    def create_volume_async(self):
-        '''
-        create volume async.
-        '''
-        options = self.create_volume_options()
-        volume_create = netapp_utils.zapi.NaElement.create_node_with_children('volume-create-async', **options)
-        if self.parameters.get('aggr_list'):
-            aggr_list_obj = netapp_utils.zapi.NaElement('aggr-list')
-            volume_create.add_child_elem(aggr_list_obj)
-            for aggr in self.parameters['aggr_list']:
-                aggr_list_obj.add_new_child('aggr-name', aggr)
-        try:
-            result = self.server.invoke_successfully(volume_create, enable_tunneling=True)
-            self.ems_log_event("volume-create")
-        except netapp_utils.zapi.NaApiError as error:
-            size_msg = ' of size %s' % self.parameters['size'] if self.parameters.get('size') is not None else ''
-            self.module.fail_json(msg='Error provisioning volume %s%s: %s'
-                                  % (self.parameters['name'], size_msg, to_native(error)),
-                                  exception=traceback.format_exc())
-        self.check_invoke_result(result, 'create')
-        return None
+               except:
+                   err = get_exception()
+                   self.module.fail_json(msg='Error gathering job info on job %s' %self.jobid, exceptions=str( err ))
 
-    def create_volume_options(self):
-        '''Set volume options for create operation'''
-        options = {}
-        if self.volume_style == 'flexgroup':
-            options['volume-name'] = self.parameters['name']
-            if self.parameters.get('aggr_list_multiplier') is not None:
-                options['aggr-list-multiplier'] = str(self.parameters['aggr_list_multiplier'])
-            if self.parameters.get('auto_provision_as') is not None:
-                options['auto-provision-as'] = self.parameters['auto_provision_as']
-            if self.parameters.get('space_guarantee') is not None:
-                options['space-guarantee'] = self.parameters['space_guarantee']
-        else:
-            options['volume'] = self.parameters['name']
-            if self.parameters.get('aggregate_name') is None:
-                self.module.fail_json(msg='Error provisioning volume %s: aggregate_name is required'
-                                      % self.parameters['name'])
-            options['containing-aggr-name'] = self.parameters['aggregate_name']
-            if self.parameters.get('space_guarantee') is not None:
-                options['space-reserve'] = self.parameters['space_guarantee']
+               attr_list = result.get_child_by_name( 'attributes-list' )
+               job_state = attr_list.get_child_by_name( 'job-info' ).get_child_by_name( 'job-state' ).get_content()
 
-        if self.parameters.get('size') is not None:
-            options['size'] = str(self.parameters['size'])
-        if self.parameters.get('snapshot_policy') is not None:
-            options['snapshot-policy'] = self.parameters['snapshot_policy']
-        if self.parameters.get('unix_permissions') is not None:
-            options['unix-permissions'] = self.parameters['unix_permissions']
-        if self.parameters.get('group_id') is not None:
-            options['group-id'] = str(self.parameters['group_id'])
-        if self.parameters.get('user_id') is not None:
-            options['user-id'] = str(self.parameters['user_id'])
-        if self.parameters.get('volume_security_style') is not None:
-            options['volume-security-style'] = self.parameters['volume_security_style']
-        if self.parameters.get('export_policy') is not None:
-            options['export-policy'] = self.parameters['export_policy']
-        if self.parameters.get('junction_path') is not None:
-            options['junction-path'] = self.parameters['junction_path']
-        if self.parameters.get('comment') is not None:
-            options['volume-comment'] = self.parameters['comment']
-        if self.parameters.get('type') is not None:
-            options['volume-type'] = self.parameters['type']
-        if self.parameters.get('percent_snapshot_space') is not None:
-            options['percentage-snapshot-reserve'] = str(self.parameters['percent_snapshot_space'])
-        if self.parameters.get('language') is not None:
-            options['language-code'] = self.parameters['language']
-        if self.parameters.get('qos_policy_group') is not None:
-            options['qos-policy-group-name'] = self.parameters['qos_policy_group']
-        if self.parameters.get('qos_adaptive_policy_group') is not None:
-            options['qos-adaptive-policy-group-name'] = self.parameters['qos_adaptive_policy_group']
-        if self.parameters.get('nvfail_enabled') is not None:
-            options['is-nvfail-enabled'] = str(self.parameters['nvfail_enabled'])
-        if self.parameters.get('space_slo') is not None:
-            options['space-slo'] = self.parameters['space_slo']
-        if self.parameters.get('tiering_policy') is not None:
-            options['tiering-policy'] = self.parameters['tiering_policy']
-        if self.parameters.get('encrypt') is not None:
-            options['encrypt'] = self.na_helper.get_value_for_bool(False, self.parameters['encrypt'], 'encrypt')
-        if self.parameters.get('vserver_dr_protection') is not None:
-            options['vserver-dr-protection'] = self.parameters['vserver_dr_protection']
-        if self.parameters['is_online']:
-            options['volume-state'] = 'online'
-        else:
-            options['volume-state'] = 'offline'
-        return options
+               if job_state == "running":
+                   time.sleep(5)
+               else:
+                   success = True
 
-    def rest_unmount_volume(self, uuid, current):
-        """
-        Unmount the volume using REST PATCH method.
-        """
-        response = None
-        if current.get('junction_path'):
-            body = dict(nas=dict(path=''))
-            response, error = rest_volume.patch_volume(self.rest_api, uuid, body)
-            self.na_helper.fail_on_error(error)
-        return response
+            self.volume_create_facts['job-state'] = job_state
 
-    def rest_delete_volume(self, current):
-        """
-        Delete the volume using REST DELETE method (it scrubs better than ZAPI).
-        """
-        uuid = self.parameters['uuid']
-        if uuid is None:
-            self.module.fail_json(msg='Could not read UUID for volume %s' % self.parameters['name'])
-        dummy = self.rest_unmount_volume(uuid, current)
-        response, error = rest_volume.delete_volume(self.rest_api, uuid)
-        self.na_helper.fail_on_error(error)
-        return response
 
     def delete_volume(self, current):
         '''Delete ONTAP volume'''
-        if self.use_rest and self.parameters['uuid'] is not None:
-            return self.rest_delete_volume(current)
-        if self.parameters.get('is_infinite') or self.volume_style == 'flexgroup':
-            if current['is_online']:
-                self.change_volume_state(call_from_delete_vol=True)
-            volume_delete = netapp_utils.zapi.NaElement.create_node_with_children(
-                'volume-destroy-async', **{'volume-name': self.parameters['name']})
+        if self.parameters.get('is_infinite'):
+            volume_delete = netapp_utils.zapi\
+                .NaElement.create_node_with_children(
+                    'volume-destory-async', **{'volume-name': self.parameters['name']})
         else:
-            volume_delete = netapp_utils.zapi.NaElement.create_node_with_children(
-                'volume-destroy', **{'name': self.parameters['name'], 'unmount-and-offline': 'true'})
+            volume_delete = netapp_utils.zapi\
+                .NaElement.create_node_with_children(
+                    'volume-destroy', **{'name': self.parameters['name'],
+                                         'unmount-and-offline': 'true'})
         try:
-            result = self.server.invoke_successfully(volume_delete, enable_tunneling=True)
-            if self.parameters.get('is_infinite') or self.volume_style == 'flexgroup':
-                self.check_invoke_result(result, 'delete')
-            self.ems_log_event("volume-delete")
+            self.server.invoke_successfully(volume_delete, enable_tunneling=True)
+            self.ems_log_event("delete")
         except netapp_utils.zapi.NaApiError as error:
             self.module.fail_json(msg='Error deleting volume %s: %s'
                                   % (self.parameters['name'], to_native(error)),
                                   exception=traceback.format_exc())
-
-    def move_volume(self, encrypt_destination=None):
+          
+    def move_volume(self):
         '''Move volume from source aggregate to destination aggregate'''
         volume_move = netapp_utils.zapi.NaElement.create_node_with_children(
             'volume-move-start', **{'source-volume': self.parameters['name'],
                                     'vserver': self.parameters['vserver'],
                                     'dest-aggr': self.parameters['aggregate_name']})
-        if self.parameters.get('cutover_action'):
-            volume_move.add_new_child('cutover-action', self.parameters['cutover_action'])
-        if encrypt_destination is not None:
-            volume_move.add_new_child('encrypt-destination', self.na_helper.get_value_for_bool(False, encrypt_destination))
         try:
             self.cluster.invoke_successfully(volume_move,
                                              enable_tunneling=True)
             self.ems_log_event("volume-move")
         except netapp_utils.zapi.NaApiError as error:
-            rest_error = self.move_volume_with_rest_passthrough(encrypt_destination)
-            if rest_error is not None:
-                self.module.fail_json(msg='Error moving volume %s: %s -  Retry failed with REST error: %s'
-                                      % (self.parameters['name'], to_native(error), rest_error),
+                self.module.fail_json(msg='Error moving volume %s: %s'
+                                      % (self.parameters['name'], to_native(error)),
                                       exception=traceback.format_exc())
-        if self.parameters.get('wait_for_completion'):
-            self.wait_for_volume_move()
-
-    def move_volume_with_rest_passthrough(self, encrypt_destination=None):
-        # MDV volume will fail on a move, but will work using the REST CLI pass through
-        # vol move start -volume MDV_CRS_d6b0b313ff5611e9837100a098544e51_A -destination-aggregate data_a3 -vserver wmc66-a
-        # if REST isn't available fail with the original error
-        if not self.use_rest:
-            return False
-        # if REST exists let's try moving using the passthrough CLI
-        api = 'private/cli/volume/move/start'
-        body = {'destination-aggregate': self.parameters['aggregate_name'],
-                }
-        if encrypt_destination is not None:
-            body['encrypt-destination'] = encrypt_destination
-        query = {'volume': self.parameters['name'],
-                 'vserver': self.parameters['vserver']
-                 }
-        dummy, error = self.rest_api.patch(api, body, query)
-        return error
-
-    def check_volume_move_state(self, result):
-        volume_move_status = result.get_child_by_name('attributes-list').get_child_by_name('volume-move-info').get_child_content('state')
-        # We have 5 states that can be returned.
-        # warning and healthy are state where the move is still going so we don't need to do anything for thouse.
-        if volume_move_status == 'done':
-            return False
-        if volume_move_status in ['failed', 'alert']:
-            self.module.fail_json(msg='Error moving volume %s: %s' %
-                                  (self.parameters['name'], result.get_child_by_name('attributes-list').get_child_by_name('volume-move-info')
-                                   .get_child_by_name('details')))
-        return True
-
-    def wait_for_volume_move(self):
-        volume_move_iter = netapp_utils.zapi.NaElement('volume-move-get-iter')
-        volume_move_info = netapp_utils.zapi.NaElement('volume-move-info')
-        volume_move_info.add_new_child('volume', self.parameters['name'])
-        query = netapp_utils.zapi.NaElement('query')
-        query.add_child_elem(volume_move_info)
-        volume_move_iter.add_child_elem(query)
-        error = self.wait_for_task_completion(volume_move_iter, self.check_volume_move_state)
-        if error:
-            self.module.fail_json(msg='Error getting volume move status: %s' % (to_native(error)),
-                                  exception=traceback.format_exc())
-
-    def check_volume_encryption_conversion_state(self, result):
-        volume_encryption_conversion_status = result.get_child_by_name('attributes-list').get_child_by_name('volume-encryption-conversion-info')\
-                                                    .get_child_content('status')
-        if volume_encryption_conversion_status == 'running':
-            return True
-        if volume_encryption_conversion_status == 'Not currently going on.':
-            return False
-        self.module.fail_json(msg='Error converting encryption for volume %s: %s' %
-                              (self.parameters['name'], volume_encryption_conversion_status))
-
-    def wait_for_volume_encryption_conversion(self):
-        volume_encryption_conversion_iter = netapp_utils.zapi.NaElement('volume-encryption-conversion-get-iter')
-        volume_encryption_conversion_info = netapp_utils.zapi.NaElement('volume-encryption-conversion-info')
-        volume_encryption_conversion_info.add_new_child('volume', self.parameters['name'])
-        volume_encryption_conversion_info.add_new_child('vserver', self.parameters['vserver'])
-        query = netapp_utils.zapi.NaElement('query')
-        query.add_child_elem(volume_encryption_conversion_info)
-        volume_encryption_conversion_iter.add_child_elem(query)
-        error = self.wait_for_task_completion(volume_encryption_conversion_iter, self.check_volume_encryption_conversion_state)
-        if error:
-            self.module.fail_json(msg='Error getting volume encryption_conversion status: %s' % (to_native(error)),
-                                  exception=traceback.format_exc())
-
-    def wait_for_task_completion(self, zapi_iter, check_state):
-        waiting = True
-        fail_count = 0
-        while waiting:
-            try:
-                result = self.cluster.invoke_successfully(zapi_iter, enable_tunneling=True)
-            except netapp_utils.zapi.NaApiError as error:
-                if fail_count < 3:
-                    fail_count += 1
-                    time.sleep(self.parameters['check_interval'])
-                    continue
-                return error
-            if int(result.get_child_content('num-records')) == 0:
-                return None
-            # reset fail count to 0
-            fail_count = 0
-            waiting = check_state(result)
-            if waiting:
-                time.sleep(self.parameters['check_interval'])
-
+        
     def rename_volume(self):
         """
         Rename the volume.
@@ -708,14 +504,33 @@ class NetAppOntapVolume(object):
             vol_rename_zapi, **{vol_name_zapi: self.parameters['from_name'],
                                 'new-volume-name': str(self.parameters['name'])})
         try:
-            result = self.server.invoke_successfully(volume_rename, enable_tunneling=True)
-            if vol_rename_zapi == 'volume-rename-async':
-                self.check_invoke_result(result, 'rename')
-            self.ems_log_event("volume-rename")
+            self.server.invoke_successfully(volume_rename,
+                                            enable_tunneling=True)
+             self.ems_log_event("volume-rename")
         except netapp_utils.zapi.NaApiError as error:
             self.module.fail_json(msg='Error renaming volume %s: %s'
                                   % (self.parameters['name'], to_native(error)),
                                   exception=traceback.format_exc())
+    def expand_flexgroup(self):
+        """
+        Expand the flexgroup
+
+        Note: 'is_infinite' needs to be set to True in order to rename an
+        Infinite Volume.
+        """
+        flexgroup_expand = netapp_utils.zapi.NaElement.create_node_with_children(
+            'volume-expand-async', **{'volume-name':      self.parameters['name'],
+                                   'aggr-list-multiplier': '1',
+                                     })
+
+         zapi_aggr_list = netapp_utils.zapi.NaElement( 'aggr-list' )
+         if self.parameters.get('aggregate_list') is not None:
+           for aggr in self.parameters.get('aggregate_list'):
+               zapi_aggr_list.add_new_child( 'aggr-name', aggr )
+           flexgroup_expand.add_child_elem( zapi_aggr_list )
+         else:
+           self.module.fail_json(msg='No aggregate_list specified for expanding volume &s' % (self.parameters['name']),exception='ERROR' )
+           
 
     def rest_resize_volume(self):
         """
