@@ -96,7 +96,7 @@ class NetAppCDOTTriggerLSMUpdate(object):
 
           try:
               job_info = netapp_utils.zapi.NaElement('job-get-iter')
-              query_details = netapp.utils.zapi.NaElement.create_node_with_children('job-info', **{'job-id': self.jobid})
+              query_details = netapp_utils.zapi.NaElement.create_node_with_children('job-info', **{'job-id': self.jobid})
               query = netapp_utils.zapi.NaElement('query')
               query.add_child_elem(query_details)
               job_info.add_child_elem(query)
@@ -111,7 +111,7 @@ class NetAppCDOTTriggerLSMUpdate(object):
           for job in attr_list.get_children():
               job_state = job.get_child_by_name('job-state').get_content()
 
-          if job_state == "running"
+          if job_state == "running":
               time.sleep(10)
           else:
               success = True
@@ -125,7 +125,7 @@ class NetAppCDOTTriggerLSMUpdate(object):
       self.module.exit_json(changed=changed, result=output)
 
 def main():
-    v = NetAppCDOTTrigger_LSMUpdate()
+    v = NetAppCDOTTriggerLSMUpdate()
     v.apply()
 
 if __name__ == '__main__':
