@@ -28,7 +28,7 @@ RETURN = """
 
 from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils.pycompat24 import get_exception
-import ansible.moudle_utils.netapp as netapp_utils
+import ansible.module_utils.netapp as netapp_utils
 import time
 
 HAS_NETAPP_LIB = netapp_utils.has_netapp_lib()
